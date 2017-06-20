@@ -37,7 +37,15 @@
  *  sent what message. 
  */
 RF24 radio(HW_CE, HW_CSN);
-const uint8_t addresses[][6] = {"0Node","1Node","2Node"};
+
+// Radio pipe addresses for the 2 nodes to communicate.
+// WARNING!! 3Node and 4Node are used by my testing sketches ping/pong
+// all nodes read on pipe[0] ( which is address "0Node" )
+// promicro arrosoir writes on pipes[2] 
+// arduino uno r3 testing rig jig'a'ma'thing writes on pipe[1]
+// 5Node and 6Node are dedicated listening pipes for Unor3 and arrosoir, respectively
+// These last 2 are not sure to be implemented, and also 0Node should still work
+const uint8_t addresses[][6] = {"0Node","1Node","2Node","5Node","6Node"};
 
 /**
  * exchange data via radio more efficiently with data structures.
@@ -58,6 +66,7 @@ struct relayctl {
   bool          state1 = false;                  // state of relay output 1                         1 byte
   bool          state2 = false;                  // "" 2                                            1 byte
   bool          waterlow = false;                // indicates whether water is low                  1 byte
+  byte          nodeid = 0;                      // nodeid is the identifier of the slave           1 byte
 } myData;
 
 void setup() 
@@ -75,17 +84,38 @@ void setup()
   for (int ii = 0; ii<= 5; ii++) 
   {  
     /*blinks the LEDS on the micro*/
+#if defined(ARDUINO_AVR_LEONARDO) 
     RXLED1;
     TXLED0; //TX LED is not tied to a normally controlled pin
+#else
+    digitalWrite(13, HIGH);
+#endif
     delay(500);              // wait for a second
+#if defined(ARDUINO_AVR_LEONARDO) 
     TXLED1;
     RXLED0;
+#else
+    digitalWrite(13, LOW);
+#endif
     delay(500);              // wait for a second
   }
+#if defined(ARDUINO_AVR_LEONARDO) 
   TXLED0; 
   RXLED0;
+#else
+  digitalWrite(13, LOW);
+#endif
   
+  //
+  // Print preamble
+  //
   Serial.begin(115200);
+  delay(500);
+  Serial.println(F("RF24 Slave - power socket controller"));  
+  delay(500);
+  Serial.println(F("Warning! Always query the controller before attempting to program it!"));  
+  delay(500);
+  Serial.println(F("- - - - -"));  
   
   radio.begin();
   radio.setCRCLength( RF24_CRC_16 ) ;
@@ -96,14 +126,17 @@ void setup()
   radio.setChannel( 108 ) ;
   radio.enableDynamicPayloads(); //dont work with my modules :-/
   
-  Serial.println(F("RF24 Slave - power socket controller -"));  
-  
   radio.openWritingPipe(addresses[2]);
   radio.openReadingPipe(1,addresses[0]);
+  radio.openReadingPipe(1,addresses[4]);
 
-  // fun
+  //
+  // Dump the configuration of the rf unit for debugging
+  //
   printf_begin();
+  Serial.println(F("Radio setup:"));  
   radio.printDetails();
+  Serial.println(F("- - - - -"));  
   
   // Start the radio listening for data
   radio.powerUp();
@@ -219,6 +252,41 @@ void loop()
   
   digitalWrite(HW_RELAY1, !myData.state1); // relays are npn-transistorized so have to reverse the logic
   digitalWrite(HW_RELAY2, !myData.state2); // of my program to de/activate each channel
+
+  if (Serial.available())
+  {
+    Serial.readString();
+    Serial.println(F("Radio setup:"));  
+    radio.printDetails();
+    Serial.println(F("- - - - -"));  
+    Serial.print("Plug 1: ");
+    Serial.print(myData.sched1);
+    Serial.print("min, during ");
+    Serial.print(myData.maxdur1);
+    Serial.print("s(currently ");
+    Serial.print(myData.state1);
+    Serial.print(")\nPlug 2: ");
+    Serial.print(myData.sched2);
+    Serial.print("min, during ");
+    Serial.print(myData.maxdur2);
+    Serial.print("s(currently ");
+    Serial.print(myData.state2);
+    Serial.print(")\nTemperature: ");
+    Serial.print(myData.temp_now);
+    Serial.print("/");
+    Serial.print(myData.temp_thres);
+    Serial.print("\nUptime: ");
+    Serial.print(myData.uptime);
+    Serial.print("min\nBattery:");
+    Serial.print(myData.battery);
+    Serial.print("V\nWaterLow:");
+    Serial.print(myData.waterlow);
+    Serial.println();
+    
+    Serial.println("RF24-BLOB-BEGIN");
+    Serial.write((uint8_t *)&myData, sizeof(myData));
+    Serial.println();
+  }
 } // Loop
 
 
