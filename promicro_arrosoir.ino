@@ -1,5 +1,11 @@
 /*
-* 
+* This is a watering system for garden plants.
+* A promicro is on a wafer with 2 relays that activate water pumps. 
+* Other equipment attached are:
+* - buzzer
+* - momentary switch indicating water level
+* - analog voltage reading a battery level
+* - thermometer (not currently connected)
 */
 
 #include <SPI.h>
@@ -10,7 +16,7 @@
 //
 #define HW_BATT   A3   // analog input
 #define HW_TEMP   A0   // analog input
-#define HW_BUZZ   3    // digital output
+#define HW_BUZZ   4    // digital output
 #define HW_WATE   6    // digital output
 #define HW_RELAY1 7    // d output
 #define HW_RELAY2 8    // digital output
@@ -18,13 +24,21 @@
 #define HW_CE    10    // icsp
 #define DEFAULT_ACTIVATION 600 // 10h from now we activate (in case radio is down and can't program)
 #define DEFAULT_DURATION 10   // max 10s of activation time by default
-#define BUZZER_ACTIVATIN_INTERVAL 60*5 // EVERY 5H
 
-/****************** User Config ***************************/
-/***      Set this radio as radio number 0 or 1         ***/
+/** 
+ *  User Config
+ *  This radio node is supposed to be "Node2", meaning it 
+ *  listens for tx from mater on pipe#0. 
+ *  The sketch rf24_RelayControl-master uses pipe#0 for
+ *  writing so all other "slaves" should use other pipes,
+ *  each node has their own pipe. This node here in this
+ *  sketch "promicro_arrosoir" is using the pipe#2. 
+ *  By doing this, the master can understand which node
+ *  sent what message. 
+ */
 RF24 radio(HW_CE, HW_CSN);
-const uint8_t addresses[][6] = {"1Node","2Node"};
-long long last_buzz_at = 0; 
+const uint8_t addresses[][6] = {"0Node","1Node","2Node"};
+
 /**
  * exchange data via radio more efficiently with data structures.
  * we can exchange max 32 bytes of data per msg. 
@@ -38,7 +52,7 @@ struct relayctl {
   unsigned long sched2 = DEFAULT_ACTIVATION;     // schedule in minutes for the relay output nbr2   4 bytes
   unsigned int  maxdur1 = DEFAULT_DURATION;      // max duration nbr1 is ON                         2 bytes
   unsigned int  maxdur2 = DEFAULT_DURATION;      // max duration nbr2 is ON                         2 bytes
-  float         temp_thres = 999;                // temperature at which the syatem is operational  4 bytes
+  unsigned int  temp_thres = 999;                // temperature at which the syatem is operational  4 bytes
   float         temp_now   = 20;                 // current temperature read on the sensor          4 bytes
   short         battery    =  0;                 // current temperature read on the sensor          2 bytes
   bool          state1 = false;                  // state of relay output 1                         1 byte
@@ -57,23 +71,22 @@ void setup()
   pinMode(HW_WATE, INPUT_PULLUP);
   pinMode(HW_BATT, INPUT);
   pinMode(HW_TEMP, INPUT);
-  
   /*a little something to tell we're alive*/
   for (int ii = 0; ii<= 5; ii++) 
   {  
     /*blinks the LEDS on the micro*/
-    //digitalWrite(RXLED, LOW);   // set the LED on
     RXLED1;
     TXLED0; //TX LED is not tied to a normally controlled pin
     delay(500);              // wait for a second
-    //digitalWrite(RXLED, HIGH);    // set the LED off
     TXLED1;
     RXLED0;
     delay(500);              // wait for a second
   }
   TXLED0; 
   RXLED0;
+  
   Serial.begin(115200);
+  
   radio.begin();
   radio.setCRCLength( RF24_CRC_16 ) ;
   radio.setRetries( 15, 5 ) ;
@@ -85,8 +98,8 @@ void setup()
   
   Serial.println(F("RF24 Slave - power socket controller -"));  
   
-  radio.openWritingPipe(addresses[0]);
-  radio.openReadingPipe(1,addresses[1]);
+  radio.openWritingPipe(addresses[2]);
+  radio.openReadingPipe(1,addresses[0]);
 
   // fun
   printf_begin();
@@ -99,9 +112,12 @@ void setup()
 }
 
 void loop() 
-{   
-  if( radio.available())
+{ 
+  byte pipeNo ; 
+  if( radio.available(&pipeNo))
   {
+    //radio.writeAckPayload(pipeNo,&gotByte, 1 );   
+    
     bool done = false;
     uint8_t len = 0;
     String s1;
@@ -128,9 +144,7 @@ void loop()
         rx_data[len+1] = 0;
       
           // Spew it
-        Serial.print(F("Got msg size="));
-        Serial.print(len);
-        Serial.print(F(" value="));
+        Serial.write("Got msg size=%d value=",len);
         Serial.println(rx_data);
       
         s1 = String(rx_data);
@@ -153,20 +167,13 @@ void loop()
       myData.state2 = false;
       myData.sched1 = 0;
       myData.sched2 = 0;
-      s1 = "stopped OK";
-      //Serial.println("Stopped");
     }
-    else //if (s1.indexOf("status")>=0) 
+    else 
     {
-      //char buffer[6];  //buffer used to format a line (+1 is for trailing 0)
-      
-      /*s1 = "Up:" + String(millis()/60000) + 
-        String(" ") + String((myData.state1?"ON":"OFF")) + 
-        String(" ") + String((myData.state2?"ON":"OFF")) + 
-        String(" ") + String(myData.sched1)  + 
-        String(" ") + String(myData.sched2)  + 
-        String(" ") + String(buffer) + String("C");*/
       Serial.print("Sending out status ");
+      delay(250); // !! Careful: this delay is here because with multiple nodes on air,
+                  //    my master always gets confused if they all respond too quickly
+                  //    at the same time.
       Serial.println(sizeof(myData));
       radio.write( &myData, sizeof(myData) );
     }
@@ -184,25 +191,29 @@ void loop()
     if ( millis()/60000 >= myData.sched1  && myData.sched1 > 0  )
     {
       myData.state1 = true;
+      radio.write( &myData, sizeof(myData) );
     }
     if ( millis()/60000 >= myData.sched2  && myData.sched2 > 0  )
     {
       myData.state2 = true;
+      radio.write( &myData, sizeof(myData) );
     }
   }
     
-  // switch relays off after max_duration
+  // switch relays off after max_duration, & sendout new status
   if ( myData.sched1 > 0 && (millis()/1000) > (myData.sched1*60)+myData.maxdur1 )
   { 
     myData.state1 = false;
     //automatically schedule relay1 to tomorrow
     myData.sched1 += (unsigned long)24*(unsigned long)60; 
+    radio.write( &myData, sizeof(myData) );
   }
   if ( myData.sched2 > 0 && (millis()/1000) > (myData.sched2*60)+myData.maxdur2 )
   { 
     myData.state2 = false;
     //automatically schedule relay2 to tomorrow
     myData.sched2 += (unsigned long)24*(unsigned long)60; 
+    radio.write( &myData, sizeof(myData) );
   }
 
   
@@ -233,14 +244,6 @@ int readTemperature()
 
   float millivolts = (value / 1024.0) * 5000;
   float celsius = millivolts / 10;  // sensor output is 10mV per degree Celsius
-  /*Serial.print(celsius);
-  Serial.println(" degrees Celsius, ");
-  
-  Serial.print( (celsius * 9)/ 5 + 32 );  //  converts celsius to fahrenheit
-  Serial.print(" degrees Fahrenheit, ");
-  
-  Serial.print("A/D value = "); Serial.println(value); 
-  */
   myData.temp_now = celsius;
   return celsius;
 }
