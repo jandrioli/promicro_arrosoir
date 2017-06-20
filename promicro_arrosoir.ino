@@ -126,6 +126,8 @@ void setup()
   radio.setChannel( 108 ) ;
   radio.enableDynamicPayloads(); //dont work with my modules :-/
   
+  Serial.println(F("RF24 Slave - power socket controller -"));  
+  
   radio.openWritingPipe(addresses[2]);
   radio.openReadingPipe(1,addresses[0]);
   radio.openReadingPipe(1,addresses[4]);
@@ -286,7 +288,18 @@ void loop()
     Serial.println("RF24-BLOB-BEGIN");
     Serial.write((uint8_t *)&myData, sizeof(myData));
     Serial.println();
-  }
+    // if we`re low on water or battery voltage dangerously low, beep the buzzer
+    if (myData.waterlow || myData.battery < 8)
+    { 
+        /*Serial.println("Water is low or battery empty"); 
+        Serial.println(millis()/60000);
+        Serial.println((unsigned long)last_buzz_at);*/
+        if (millis()/60000 > last_buzz_at)
+      {
+        last_buzz_at = (millis()/60000)+BUZZER_ACTIVATIN_INTERVAL;
+        writeBuzzer();
+      }
+    }
 } // Loop
 
 
@@ -314,7 +327,34 @@ int readBatteryVoltage()
 
 bool readWaterLevelLow()
 {
-  myData.waterlow = digitalRead(HW_WATE);
+  myData.waterlow = !digitalRead(HW_WATE);
   return myData.waterlow;
 }
 
+void writeBuzzer()
+{
+  int i = 0;
+  int numOfLoops = 0;
+  int noteDuration = 1000/8;  // an eighth note
+  int pauseBetweenNotes = noteDuration * 0.2;
+
+
+  // This outer for statement determines the number
+  // of siren cycles that are played.
+  for(numOfLoops =0; numOfLoops < 4; numOfLoops++) 
+  {
+    // Play low to high frequencies
+    for(i=25;i<120;i++)
+    {
+      tone(HW_BUZZ, 20*i, noteDuration);
+      delay(pauseBetweenNotes);
+    }
+    // Play high to low frequencies
+    for(i=120;i>=25;i--)
+    {
+      tone(HW_BUZZ, 20*i, noteDuration);
+      delay(pauseBetweenNotes);
+    }
+  }
+
+ }
